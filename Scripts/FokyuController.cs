@@ -14,10 +14,12 @@ public class FokyuController : MonoBehaviour
     public float detectionRange = 8f;
     public float loseRange = 12f;
 
+    [Header("State")]
+    public bool canChase = false; // enabled later by GameManager
+
     [Header("Animation")]
     private Animator anim;
     private NavMeshAgent agent;
-
     private int currentPoint = 0;
     private bool isChasing = false;
     private bool isWaiting = false;
@@ -28,28 +30,39 @@ public class FokyuController : MonoBehaviour
         agent = GetComponent<NavMeshAgent>();
         anim = GetComponentInChildren<Animator>();
         agent.speed = patrolSpeed;
-
         if (patrolPoints.Length > 0)
             agent.SetDestination(patrolPoints[0].position);
     }
 
     void Update()
     {
+        if (!agent.enabled) return;
+
         float distToPlayer = Vector3.Distance(transform.position, player.position);
 
-        // Detection
-        if (!isChasing && distToPlayer < detectionRange)
-            StartChase();
-        else if (isChasing && distToPlayer > loseRange)
+        if (canChase)
+        {
+            if (!isChasing && distToPlayer < detectionRange)
+                StartChase();
+            else if (isChasing && distToPlayer > loseRange)
+                StopChase();
+        }
+        else if (isChasing)
+        {
             StopChase();
+        }
 
         if (isChasing)
             Chase();
         else
             Patrol();
 
-        // Animation
         anim.SetFloat("Speed", agent.velocity.magnitude);
+    }
+
+    public void EnableChase()
+    {
+        canChase = true;
     }
 
     void Chase()
@@ -75,7 +88,6 @@ public class FokyuController : MonoBehaviour
     void Patrol()
     {
         if (patrolPoints.Length == 0) return;
-
         if (isWaiting)
         {
             waitTimer += Time.deltaTime;
@@ -88,7 +100,6 @@ public class FokyuController : MonoBehaviour
             }
             return;
         }
-
         if (!agent.pathPending && agent.remainingDistance < 0.5f)
         {
             isWaiting = true;

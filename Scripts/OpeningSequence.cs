@@ -4,95 +4,163 @@ using System.Collections;
 public class OpeningSequence : MonoBehaviour
 {
     [Header("Cameras")]
-    public Camera cutsceneCamera;       // Separate cutscene cam at desk
-    public Camera playerCamera;         // Main cam (child of Employee) — disabled at start
+    public Camera cutsceneCamera;   // does the Sleep->Wake lerp
+    public Camera wakeCamera;       // handles limited look while phone rings
+    public Camera playerCamera;     // takes over after call ends
 
     [Header("Cutscene Cam Positions")]
-    public Transform sleepTransform;    // Empty GO: face-down position at desk
-    public Transform wakeTransform;     // Empty GO: lifted/upright position
+    public Transform sleepTransform;
+    public Transform wakeTransform;
 
     [Header("Timing")]
-    public float sleepHoldDuration = 1.5f;      // how long to stay face-down
-    public float wakeUpDuration = 3f;            // how long the head lift takes
-    public float afterWakePause = 1.5f;          // pause before Fokyu placeholder
-    public float fokyuPlaceholderDuration = 2f;  // placeholder wait (replace with Fokyu later)
-    public float fadeDuration = 1f;              // fade out + fade in duration
+    public float blackScreenDuration = 1f;
+    public float wakeUpDuration = 3f;
+    public float fadeDuration = 1f;
 
     [Header("Fade")]
-    public CanvasGroup fadeCanvas;      // Black UI canvas covering screen
+    public CanvasGroup fadeCanvas;
 
     [Header("Player")]
     public Employee employeeScript;
     public CameraController cameraController;
 
+    [Header("Phone")]
+    public AudioSource phoneRingSource;
+    public AudioClip phoneRingClip;
+    public AudioSource fokyuVoiceSource;
+    public AudioClip fokyuIntroClip;
+
+    [Header("UI")]
+    public GameObject phonePrompt;
+
+    [Header("Task Manager")]
+    public TaskManager taskManager;
+
+    private WakeCameraController wakeCameraController;
+
     void Start()
     {
-        // Disable player control
         employeeScript.enabled = false;
         cameraController.enabled = false;
         playerCamera.gameObject.SetActive(false);
+        wakeCamera.gameObject.SetActive(false);
 
-        // Set cutscene cam to sleep position
+        // CutsceneCamera starts at sleep pos
         cutsceneCamera.gameObject.SetActive(true);
         cutsceneCamera.transform.position = sleepTransform.position;
         cutsceneCamera.transform.rotation = sleepTransform.rotation;
 
-        // Start fully faded in (black), then fade out to reveal scene
-        fadeCanvas.alpha = 1f;
-
-        StartCoroutine(PlaySequence());
-    }
-
-    IEnumerator PlaySequence()
-    {
-        // Fade in from black
-        yield return StartCoroutine(Fade(1f, 0f, fadeDuration));
-
-        // Hold sleep position
-        yield return new WaitForSeconds(sleepHoldDuration);
-
-        // Lift head — lerp cutscene cam from sleep to wake transform
-        float elapsed = 0f;
-        while (elapsed < wakeUpDuration)
+        // Grab WakeCameraController and disable until needed
+        wakeCameraController = wakeCamera.GetComponent<WakeCameraController>();
+        if (wakeCameraController != null)
         {
-            elapsed += Time.deltaTime;
-            float t = Mathf.SmoothStep(0f, 1f, elapsed / wakeUpDuration);
-            cutsceneCamera.transform.position = Vector3.Lerp(
-                sleepTransform.position, wakeTransform.position, t);
-            cutsceneCamera.transform.rotation = Quaternion.Lerp(
-                sleepTransform.rotation, wakeTransform.rotation, t);
-            yield return null;
+            wakeCameraController.enabled = false;
+            wakeCameraController.canLook = false;
         }
 
-        // Snap to wake position
-        cutsceneCamera.transform.position = wakeTransform.position;
-        cutsceneCamera.transform.rotation = wakeTransform.rotation;
+        fadeCanvas.alpha = 1f;
+        StartCoroutine(PlayOpeningSequence());
+    }
 
-        yield return new WaitForSeconds(afterWakePause);
+    IEnumerator PlayOpeningSequence()
+    {
+        yield return new WaitForSeconds(blackScreenDuration);
 
-        // --- FOKYU PLACEHOLDER ---
-        // Phase 2: trigger Fokyu entrance here
-        // e.g. FokyuController.Instance.TriggerEntrance();
-        Debug.Log("[OpeningSequence] Fokyu would enter here.");
-        yield return new WaitForSeconds(fokyuPlaceholderDuration);
-        // -------------------------
-
-        // Fade out
-        yield return StartCoroutine(Fade(0f, 1f, fadeDuration));
-
-        // Switch to player camera
-        cutsceneCamera.gameObject.SetActive(false);
-        playerCamera.gameObject.SetActive(true);
+        // Start phone ringing
+        phoneRingSource.clip = phoneRingClip;
+        phoneRingSource.loop = true;
+        phoneRingSource.Play();
 
         // Fade in
         yield return StartCoroutine(Fade(1f, 0f, fadeDuration));
 
-        // Give player control
-        employeeScript.enabled = true;
-        cameraController.enabled = true;
+        // Lerp cutscene cam from sleep to wake
+        yield return StartCoroutine(LerpCamera(sleepTransform, wakeTransform, wakeUpDuration));
+
+        // Swap to wake cam
+        cutsceneCamera.gameObject.SetActive(false);
+        wakeCamera.gameObject.SetActive(true);
+
+        // Enable limited look
+        if (wakeCameraController != null)
+        {
+            wakeCameraController.enabled = true;
+            wakeCameraController.canLook = true;
+        }
 
         Cursor.lockState = CursorLockMode.Locked;
         Cursor.visible = false;
+
+        // Show prompt, wait for E
+        if (phonePrompt != null)
+			Debug.Log("Showing prompt: " + (phonePrompt != null ? phonePrompt.name : "NULL"));
+            phonePrompt.SetActive(true);
+
+        yield return new WaitUntil(() => Input.GetKeyDown(KeyCode.E));
+
+        if (phonePrompt != null)
+            phonePrompt.SetActive(false);
+
+        if (wakeCameraController != null)
+            wakeCameraController.canLook = false;
+
+        AnswerPhone();
+    }
+
+    void AnswerPhone()
+    {
+        phoneRingSource.Stop();
+
+        if (fokyuIntroClip != null)
+        {
+            fokyuVoiceSource.clip = fokyuIntroClip;
+            fokyuVoiceSource.Play();
+            StartCoroutine(WaitForVoiceEnd());
+        }
+        else
+        {
+            StartCoroutine(TransitionToPlayer());
+        }
+    }
+
+    IEnumerator WaitForVoiceEnd()
+    {
+        yield return new WaitForSeconds(fokyuIntroClip.length);
+        fokyuVoiceSource.Stop();
+        yield return StartCoroutine(TransitionToPlayer());
+    }
+
+    IEnumerator TransitionToPlayer()
+    {
+        yield return StartCoroutine(Fade(0f, 1f, fadeDuration));
+
+        wakeCamera.gameObject.SetActive(false);
+        playerCamera.gameObject.SetActive(true);
+
+        employeeScript.enabled = true;
+        cameraController.enabled = true;
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
+
+        yield return StartCoroutine(Fade(1f, 0f, fadeDuration));
+
+        if (taskManager != null)
+            taskManager.StartTasks();
+    }
+
+    IEnumerator LerpCamera(Transform from, Transform to, float duration)
+    {
+        float elapsed = 0f;
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.SmoothStep(0f, 1f, elapsed / duration);
+            cutsceneCamera.transform.position = Vector3.Lerp(from.position, to.position, t);
+            cutsceneCamera.transform.rotation = Quaternion.Lerp(from.rotation, to.rotation, t);
+            yield return null;
+        }
+        cutsceneCamera.transform.position = to.position;
+        cutsceneCamera.transform.rotation = to.rotation;
     }
 
     IEnumerator Fade(float from, float to, float duration)
